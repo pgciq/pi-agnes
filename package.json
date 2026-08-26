@@ -1,0 +1,31 @@
+{
+  "name": "pi-agnes",
+  "version": "1.0.0",
+  "description": "Pi extension for Agnes AI providers",
+  "keywords": ["pi-package", "agnes", "agnes-ai"],
+  "license": "MIT",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/pgciq/pi-agnes"
+  },
+  "files": [
+    "extensions",
+    "README.md"
+  ],
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org/"
+  },
+  "scripts": {
+    "test": "node --test"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  },
+  "pi": {
+    "extensions": [
+      "./extensions"
+    ]
+  }
+}
