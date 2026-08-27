@@ -27,9 +27,19 @@ function detectLimits(id) {
 const IMAGE_MODELS = new Set(["agnes-image-2.0-flash", "agnes-image-2.1-flash"]);
 const VIDEO_MODELS = new Set(["agnes-video-v2.0", "agnes-video-2.5", "agnes-video-2.5-flash"]);
 
+// Prefix checks let newly released Agnes image/video versions route correctly
+// as soon as they appear in /v1/models, without requiring a plugin update.
+function isImageModel(id) {
+  return IMAGE_MODELS.has(id) || id.startsWith("agnes-image-");
+}
+
+function isVideoModel(id) {
+  return VIDEO_MODELS.has(id) || id.startsWith("agnes-video-");
+}
+
 function convertModel(model) {
   const id = model.id;
-  const imageModel = IMAGE_MODELS.has(id);
+  const imageModel = isImageModel(id);
   return {
     id,
     name: model.id || id,
@@ -160,8 +170,8 @@ function streamAgnesImage(model, context, options) {
 }
 
 function streamAgnes(model, context, options) {
-  if (model.agnesVideoModel || VIDEO_MODELS.has(model.id)) return streamAgnesVideo(model, context, options);
-  if (model.agnesImageModel || IMAGE_MODELS.has(model.id)) return streamAgnesImage(model, context, options);
+  if (model.agnesVideoModel || isVideoModel(model.id)) return streamAgnesVideo(model, context, options);
+  if (model.agnesImageModel || isImageModel(model.id)) return streamAgnesImage(model, context, options);
   return openAICompletionsApi().streamSimple(model, context, options);
 }
 
