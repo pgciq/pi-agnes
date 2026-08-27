@@ -25,6 +25,7 @@ function detectLimits(id) {
 }
 
 const IMAGE_MODELS = new Set(["agnes-image-2.0-flash", "agnes-image-2.1-flash"]);
+const VIDEO_MODELS = new Set(["agnes-video-v2.0", "agnes-video-2.5", "agnes-video-2.5-flash"]);
 
 function convertModel(model) {
   const id = model.id;
@@ -37,6 +38,7 @@ function convertModel(model) {
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     ...detectLimits(id),
     agnesImageModel: imageModel,
+    agnesVideoModel: VIDEO_MODELS.has(id),
   };
 }
 
@@ -49,6 +51,9 @@ const AGNES_SEED = [
   "agnes-2.5-pro",
   "agnes-2.5-pro-alpha",
   "agnes-2.0-flash",
+  "agnes-video-v2.0",
+  "agnes-video-2.5",
+  "agnes-video-2.5-flash",
 ];
 
 // ---------------------------------------------------------------------------
@@ -155,8 +160,92 @@ function streamAgnesImage(model, context, options) {
 }
 
 function streamAgnes(model, context, options) {
+  if (model.agnesVideoModel || VIDEO_MODELS.has(model.id)) return streamAgnesVideo(model, context, options);
   if (model.agnesImageModel || IMAGE_MODELS.has(model.id)) return streamAgnesImage(model, context, options);
   return openAICompletionsApi().streamSimple(model, context, options);
+}
+
+async function waitForVideo(baseUrl, videoId, apiKey, signal) {
+  const deadline = Date.now() + 30 * 60 * 1000;
+  while (Date.now() < deadline) {
+    if (signal?.aborted) throw new Error("Video generation aborted");
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(resolve, 5000);
+      signal?.addEventListener("abort", () => { clearTimeout(timer); reject(new Error("Video generation aborted")); }, { once: true });
+    });
+    const apiRoot = baseUrl.replace(/\/v1\/?$/, "");
+    const response = await fetch(`${apiRoot}/agnesapi?video_id=${encodeURIComponent(videoId)}`, {
+      headers: { Authorization: `Bearer ${apiKey}` }, signal,
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload?.error?.message ?? `Agnes video status HTTP ${response.status}`);
+    if (payload.status === "completed") return payload;
+    if (payload.status === "failed") throw new Error(payload?.error?.message ?? "Agnes video generation failed");
+  }
+  throw new Error("Agnes video generation timed out after 30 minutes");
+}
+
+async function saveVideo(url, modelId) {
+  const directory = join(process.cwd(), ".pi", "generated-videos");
+  await mkdir(directory, { recursive: true });
+  const filePath = join(directory, `${modelId}-${Date.now()}.mp4`);
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`Unable to download generated video: HTTP ${response.status}`);
+  await writeFile(filePath, Buffer.from(await response.arrayBuffer()));
+  return filePath;
+}
+
+function streamAgnesVideo(model, context, options) {
+  const stream = createAssistantMessageEventStream();
+  const output = {
+    role: "assistant", content: [], api: model.api, provider: model.provider, model: model.id,
+    usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+    stopReason: "pending", timestamp: Date.now(),
+  };
+  (async () => {
+    try {
+      stream.push({ type: "start", partial: output });
+      const { prompt, images } = imageRequestContent(context);
+      if (!prompt) throw new Error("Video generation requires a text prompt");
+      const baseUrl = model.baseUrl ?? (model.provider === "agnes-cn" ? "https://api.agnes-ai.cn/v1" : "https://apihub.agnes-ai.com/v1");
+      const apiKey = process.env[model.provider === "agnes-cn" ? "AGNES_CN_API_KEY" : "AGNES_API_KEY"] ?? "";
+      const body = {
+        model: model.id,
+        prompt,
+        ...(images.length === 1 ? { image: `data:${images[0].mimeType};base64,${images[0].data}` } : {}),
+        ...(images.length > 1 ? { extra_body: { image: images.map((image) => `data:${image.mimeType};base64,${image.data}`), mode: "keyframes" } } : {}),
+        num_frames: 121,
+        frame_rate: 24,
+      };
+      const response = await fetch(`${baseUrl}/videos`, {
+        method: "POST", headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+        body: JSON.stringify(body), signal: options?.signal,
+      });
+      const task = await response.json();
+      if (!response.ok) throw new Error(task?.error?.message ?? `Agnes video API HTTP ${response.status}`);
+      const videoId = task.video_id ?? task.id ?? task.task_id;
+      if (!videoId) throw new Error("Agnes video API returned no video_id");
+      const result = task.status === "completed" ? task : await waitForVideo(baseUrl, videoId, apiKey, options?.signal);
+      const url = result?.metadata?.url;
+      if (!url) throw new Error("Agnes video API returned no metadata.url");
+      const filePath = await saveVideo(url, model.id);
+      const text = `Generated video saved to: ${filePath}\n\nVideo URL: ${url}`;
+      output.content.push({ type: "text", text });
+      stream.push({ type: "text_start", contentIndex: 0, partial: output });
+      stream.push({ type: "text_delta", contentIndex: 0, delta: text, partial: output });
+      stream.push({ type: "text_end", contentIndex: 0, content: text, partial: output });
+      output.stopReason = "stop";
+      stream.push({ type: "done", reason: "stop", message: output });
+      stream.end();
+    } catch (error) {
+      output.stopReason = options?.signal?.aborted ? "aborted" : "error";
+      output.errorMessage = error instanceof Error ? error.message : String(error);
+      stream.push({ type: "error", reason: output.stopReason, error: output });
+      stream.end();
+    }
+  })();
+  return stream;
 }
 
 // ---------------------------------------------------------------------------
