@@ -1,8 +1,12 @@
 {
   "name": "pi-agnes",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Pi extension for Agnes AI providers",
-  "keywords": ["pi-package", "agnes", "agnes-ai"],
+  "keywords": [
+    "pi-package",
+    "agnes",
+    "agnes-ai"
+  ],
   "license": "MIT",
   "type": "module",
   "repository": {

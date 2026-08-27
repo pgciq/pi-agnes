@@ -44,8 +44,7 @@ const AGNES_SEED = [
 // Dynamic model fetch (shared by startup & refreshModels)
 // ---------------------------------------------------------------------------
 
-async function fetchModels(baseUrl, apiKeyEnv, signal) {
-  const apiKey = process.env[apiKeyEnv];
+async function fetchModels(baseUrl, apiKey, signal) {
   const headers = {};
   if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`;
 
@@ -73,40 +72,51 @@ export default function (pi) {
   for (const p of providers) {
     const baseUrl = p.baseUrl;
     const apiKeyEnv = p.apiKeyEnv;
-    // If env var is set, use $VAR reference so pi picks it up; otherwise
-    // use a placeholder so the provider still shows in --list-models and
-    // the user gets a clear auth error instead of a silent skip.
-    const apiKeyRef = process.env[apiKeyEnv] ? `$${apiKeyEnv}` : "<missing>";
-    if (!process.env[apiKeyEnv]) {
-      console.error(`[pi-agnes] ${p.name}: ${apiKeyEnv} is not set. Provider will be listed but API calls will fail until the env var is configured.`);
-    }
+    // Let /login provide the key when the environment variable is absent.
+    // A literal placeholder would make pi consider the provider configured,
+    // while still sending an invalid key during model refresh.
+    const apiKeyRef = process.env[apiKeyEnv] ? `$${apiKeyEnv}` : undefined;
 
     pi.registerProvider(p.id, {
       name: p.name,
       baseUrl,
-      apiKey: apiKeyRef,
+      ...(apiKeyRef ? { apiKey: apiKeyRef } : {}),
       api: "openai-completions",
       models: AGNES_SEED.map((id) => convertModel({ id })),
 
-      async refreshModels({ signal, stored, publish }) {
+      async refreshModels({ signal, stored, publish, allowNetwork, credential }) {
+        // `stored` is a catalog entry ({ models: [...] }), not the model list
+        // itself. Returning it directly makes pi reject the refresh result.
+        const cachedModels = Array.isArray(stored?.models) ? stored.models : undefined;
+
+        // Pi runs a cache-only refresh during startup and passes the resolved
+        // credential (from env or /login) to the network refresh. Do not fetch
+        // from process.env here: that would ignore keys entered via /login.
+        if (!allowNetwork || signal.aborted) return cachedModels;
+
+        const apiKey = credential?.type === "api_key"
+          ? credential.key
+          : process.env[apiKeyEnv];
+
         let models;
         try {
-          models = await fetchModels(baseUrl, apiKeyEnv, signal);
+          models = await fetchModels(baseUrl, apiKey, signal);
         } catch (error) {
-          // If we have a cached catalog from a previous refresh, use it
-          if (stored) return stored;
-          // Otherwise keep the seed list (caller still has it)
+          // Keep the last valid catalog on transient network/auth failures.
+          // Re-throw only when there is no cache, so pi can report the error
+          // without replacing the seed models with an invalid value.
+          if (cachedModels) return cachedModels;
           throw error;
         }
 
         if (models.length > 0) {
-          // Persist the catalog so it survives restarts & offline starts
-          publish({ persist: { provider: p.id, models } });
+          // Persist the catalog so it survives restarts & offline starts.
+          await publish({ persist: { provider: p.id, models } });
           return models;
         }
 
-        // No models returned — keep whatever we have
-        return stored ?? undefined;
+        // No models returned — keep whatever we have.
+        return cachedModels;
       },
     });
   }
