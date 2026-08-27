@@ -16,6 +16,11 @@ function listModels() {
       cwd: projectRoot,
       encoding: "utf8",
       timeout: 30_000,
+      env: {
+        ...process.env,
+        AGNES_API_KEY: "test-key",
+        AGNES_CN_API_KEY: "test-key",
+      },
     },
   );
 }
