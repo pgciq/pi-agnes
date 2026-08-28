@@ -277,7 +277,7 @@ function streamAgnesVideo(model, context, options) {
 
 export default function (pi) {
   appendAgnesImage = (image) => pi.appendEntry("agnes-generated-image", image);
-  pi.registerEntryRenderer("agnes-generated-image", (entry, _options, theme) => {
+  pi.registerEntryRenderer?.("agnes-generated-image", (entry, _options, theme) => {
     const image = entry.data ?? {};
     // pi passes an entry-renderer `theme` that lacks `fallbackColor()`, which
     // `Image.render` calls. Wrap it so inline previews render and never throw.
