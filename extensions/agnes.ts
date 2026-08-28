@@ -7,11 +7,15 @@
 // and re-used on subsequent starts when the API is unreachable.
 
 import { mkdir, writeFile } from "node:fs/promises";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   createAssistantMessageEventStream,
   openAICompletionsApi,
 } from "@earendil-works/pi-ai";
+import { Image, Markdown } from "@earendil-works/pi-tui";
+
+let appendAgnesImage = null;
 
 // ---------------------------------------------------------------------------
 // Model helpers
@@ -116,7 +120,7 @@ async function saveImage(image, modelId) {
     if (!response.ok) throw new Error(`Unable to download image: HTTP ${response.status}`);
     await writeFile(filePath, Buffer.from(await response.arrayBuffer()));
   } else throw new Error("Agnes image API returned no url or b64_json");
-  return filePath;
+  return { filePath, mimeType: mime };
 }
 
 function streamAgnesImage(model, context, options) {
@@ -148,7 +152,9 @@ function streamAgnesImage(model, context, options) {
       if (!response.ok) throw new Error(payload?.error?.message ?? `Agnes image API HTTP ${response.status}`);
       const image = payload?.data?.[0];
       if (!image) throw new Error("Agnes image API returned no image data");
-      const filePath = await saveImage(image, model.id);
+      const saved = await saveImage(image, model.id);
+      const filePath = saved.filePath;
+      appendAgnesImage?.({ path: filePath, mimeType: saved.mimeType });
       const text = image.url
         ? `![Generated image](${image.url})\n\nSaved local copy: ${filePath}\n\nImage URL may expire according to Agnes retention policy.`
         : `Generated image saved to: ${filePath}`;
@@ -263,6 +269,17 @@ function streamAgnesVideo(model, context, options) {
 // ---------------------------------------------------------------------------
 
 export default function (pi) {
+  appendAgnesImage = (image) => pi.appendEntry("agnes-generated-image", image);
+  pi.registerEntryRenderer("agnes-generated-image", (entry, _options, theme) => {
+    const image = entry.data ?? {};
+    try {
+      const data = readFileSync(image.path).toString("base64");
+      return new Image(data, image.mimeType || "image/png", theme, { maxWidthCells: 80, maxHeightCells: 30 });
+    } catch {
+      return new Markdown(`Generated image unavailable: ${image.path ?? "unknown path"}`, 1, 0, theme);
+    }
+  });
+
   const providers = [
     { id: "agnes", name: "Agnes AI", baseUrl: "https://apihub.agnes-ai.com/v1", apiKeyEnv: "AGNES_API_KEY" },
     { id: "agnes-cn", name: "Agnes AI (CN)", baseUrl: "https://api.agnes-ai.cn/v1", apiKeyEnv: "AGNES_CN_API_KEY" },

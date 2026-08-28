@@ -31,6 +31,10 @@ Set the API key for the endpoint you want to use:
 - A successful background refresh replaces the seed list and is persisted to pi's provider cache, so it survives restarts and offline starts.
 - Every network call is bounded by a timeout and degrades to the seed list on any failure.
 
+## Image generation
+
+Both Agnes endpoints expose `POST /v1/images/generations`; the main and CN endpoints were live-tested with `agnes-image-2.1-flash`. Generated images are saved under `.pi/generated-images/`, supported terminals receive a TUI `Image` entry, and print/RPC mode reports the saved path.
+
 ## Usage
 
 ```bash
