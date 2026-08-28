@@ -33,7 +33,7 @@ Set the API key for the endpoint you want to use:
 
 ## Image generation
 
-Both Agnes endpoints expose `POST /v1/images/generations`; the main and CN endpoints were live-tested with `agnes-image-2.1-flash`. Generated images are saved under `.pi/generated-images/`, supported terminals receive a TUI `Image` entry, and print/RPC mode reports the saved path.
+Both Agnes endpoints expose `POST /v1/images/generations`; the main and CN endpoints were live-tested with `agnes-image-2.1-flash`. Generated images are saved under `.pi/generated-images/`; supported terminals receive a TUI `Image` entry (rendered inline when the terminal supports a graphics protocol), and the saved path is reported as a clickable `file://` link in the TUI. Print/RPC mode reports the saved path as plain text.
 
 ## Usage
 
