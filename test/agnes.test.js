@@ -10,7 +10,7 @@ const extension = join(projectRoot, "extensions", "agnes.ts");
 
 function listModels() {
   return execFileSync(
-    "pi",
+    process.platform === "win32" ? "pi.cmd" : "pi",
     ["--no-extensions", "-e", extension, "--offline", "--list-models", "agnes"],
     {
       cwd: projectRoot,
@@ -21,6 +21,7 @@ function listModels() {
         AGNES_API_KEY: "test-key",
         AGNES_CN_API_KEY: "test-key",
       },
+      shell: process.platform === "win32",
     },
   );
 }
