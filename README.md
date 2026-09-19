@@ -23,7 +23,16 @@ Set the API key for the endpoint you want to use:
 | `agnes` | `https://apihub.agnes-ai.com/v1` | `AGNES_API_KEY` |
 | `agnes-cn` | `https://api.agnes-ai.cn/v1` | `AGNES_CN_API_KEY` |
 
-## Model discovery (non-blocking)
+You can store either key in Pi instead of an environment variable:
+
+```text
+/login agnes
+/login agnes-cn
+```
+
+Pi saves credentials in `~/.pi/agent/auth.json`; the environment variables
+remain supported as fallbacks.
+
 
 `pi-agnes` registers a **seed** model catalog synchronously at load (so pi starts instantly) and refreshes it from `/v1/models` **in the background** via pi's `refreshModels` callback — it never blocks startup on the network.
 
@@ -33,7 +42,7 @@ Set the API key for the endpoint you want to use:
 
 ## Image generation
 
-Both Agnes endpoints expose `POST /v1/images/generations`; the main and CN endpoints were live-tested with `agnes-image-2.1-flash`. Generated images are saved under `.pi/generated-images/`; supported terminals receive a TUI `Image` entry (rendered inline when the terminal supports a graphics protocol), and the saved path is reported as a clickable `file://` link in the TUI. Print/RPC mode reports the saved path as plain text.
+Both Agnes endpoints expose `POST /v1/images/generations`; the main and CN endpoints were live-tested with `agnes-image-2.1-flash`. Generated images are saved under `.pi/generated-images/`, supported terminals receive a TUI `Image` entry, and print/RPC mode reports the saved path.
 
 ## Usage
 

@@ -9,18 +9,11 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { pathToFileURL } from "node:url";
 import {
   createAssistantMessageEventStream,
   openAICompletionsApi,
 } from "@earendil-works/pi-ai";
 import { Image, Markdown } from "@earendil-works/pi-tui";
-
-// Convert an absolute path to a clickable Markdown link. The TUI renders
-// `[label](url)` as an OSC 8 hyperlink, so the saved file opens in one click.
-function fileLink(p, label = p) {
-  return `[${label}](${pathToFileURL(String(p)).href})`;
-}
 
 let appendAgnesImage = null;
 
@@ -130,6 +123,10 @@ async function saveImage(image, modelId) {
   return { filePath, mimeType: mime };
 }
 
+function providerKey(model, options) {
+  return options?.apiKey ?? process.env[model.provider === "agnes-cn" ? "AGNES_CN_API_KEY" : "AGNES_API_KEY"] ?? "";
+}
+
 function streamAgnesImage(model, context, options) {
   const stream = createAssistantMessageEventStream();
   const output = {
@@ -152,7 +149,7 @@ function streamAgnesImage(model, context, options) {
       const baseUrl = model.baseUrl ?? (model.provider === "agnes-cn" ? "https://api.agnes-ai.cn/v1" : "https://apihub.agnes-ai.com/v1");
       const response = await fetch(`${baseUrl}/images/generations`, {
         method: "POST",
-        headers: { Authorization: `Bearer ${process.env[model.provider === "agnes-cn" ? "AGNES_CN_API_KEY" : "AGNES_API_KEY"] ?? ""}`, "Content-Type": "application/json" },
+        headers: { Authorization: `Bearer ${providerKey(model, options)}`, "Content-Type": "application/json" },
         body: JSON.stringify(body), signal: options?.signal,
       });
       const payload = await response.json();
@@ -163,8 +160,8 @@ function streamAgnesImage(model, context, options) {
       const filePath = saved.filePath;
       appendAgnesImage?.({ path: filePath, mimeType: saved.mimeType });
       const text = image.url
-        ? `![Generated image](${image.url})\n\nSaved local copy: ${fileLink(filePath)}\n\nImage URL may expire according to Agnes retention policy.`
-        : `Generated image saved to: ${fileLink(filePath)}`;
+        ? `![Generated image](${image.url})\n\nSaved local copy: ${filePath}\n\nImage URL may expire according to Agnes retention policy.`
+        : `Generated image saved to: ${filePath}`;
       output.content.push({ type: "text", text });
       stream.push({ type: "text_start", contentIndex: 0, partial: output });
       stream.push({ type: "text_delta", contentIndex: 0, delta: text, partial: output });
@@ -232,7 +229,7 @@ function streamAgnesVideo(model, context, options) {
       const { prompt, images } = imageRequestContent(context);
       if (!prompt) throw new Error("Video generation requires a text prompt");
       const baseUrl = model.baseUrl ?? (model.provider === "agnes-cn" ? "https://api.agnes-ai.cn/v1" : "https://apihub.agnes-ai.com/v1");
-      const apiKey = process.env[model.provider === "agnes-cn" ? "AGNES_CN_API_KEY" : "AGNES_API_KEY"] ?? "";
+      const apiKey = providerKey(model, options);
       const body = {
         model: model.id,
         prompt,
@@ -253,7 +250,7 @@ function streamAgnesVideo(model, context, options) {
       const url = result?.metadata?.url;
       if (!url) throw new Error("Agnes video API returned no metadata.url");
       const filePath = await saveVideo(url, model.id);
-      const text = `Generated video saved to: ${fileLink(filePath)}\n\nVideo URL: ${url}`;
+      const text = `Generated video saved to: ${filePath}\n\nVideo URL: ${url}`;
       output.content.push({ type: "text", text });
       stream.push({ type: "text_start", contentIndex: 0, partial: output });
       stream.push({ type: "text_delta", contentIndex: 0, delta: text, partial: output });
@@ -277,18 +274,13 @@ function streamAgnesVideo(model, context, options) {
 
 export default function (pi) {
   appendAgnesImage = (image) => pi.appendEntry("agnes-generated-image", image);
-  pi.registerEntryRenderer?.("agnes-generated-image", (entry, _options, theme) => {
+  pi.registerEntryRenderer("agnes-generated-image", (entry, _options, theme) => {
     const image = entry.data ?? {};
-    // pi passes an entry-renderer `theme` that lacks `fallbackColor()`, which
-    // `Image.render` calls. Wrap it so inline previews render and never throw.
-    const imageTheme = theme && typeof theme.fallbackColor === "function"
-      ? theme
-      : { fallbackColor: (s) => (theme && theme.fg ? theme.fg("toolOutput", s) : s) };
     try {
       const data = readFileSync(image.path).toString("base64");
-      return new Image(data, image.mimeType || "image/png", imageTheme, { maxWidthCells: 80, maxHeightCells: 30 });
+      return new Image(data, image.mimeType || "image/png", theme, { maxWidthCells: 80, maxHeightCells: 30 });
     } catch {
-      return new Markdown(`Generated image unavailable: ${fileLink(image.path ?? "unknown path")}`, 1, 0, theme);
+      return new Markdown(`Generated image unavailable: ${image.path ?? "unknown path"}`, 1, 0, theme);
     }
   });
 
@@ -303,50 +295,53 @@ export default function (pi) {
     // Let /login provide the key when the environment variable is absent.
     // A literal placeholder would make pi consider the provider configured,
     // while still sending an invalid key during model refresh.
-    const apiKeyRef = process.env[apiKeyEnv] ? `$${apiKeyEnv}` : undefined;
-
-    pi.registerProvider(p.id, {
+    let currentModels = AGNES_SEED.map((id) => convertModel({ id }));
+    const provider = {
+      id: p.id,
       name: p.name,
       baseUrl,
-      ...(apiKeyRef ? { apiKey: apiKeyRef } : {}),
-      api: "openai-completions",
-      streamSimple: streamAgnes,
-      models: AGNES_SEED.map((id) => convertModel({ id })),
-
-      async refreshModels({ signal, stored, publish, allowNetwork, credential }) {
-        // `stored` is a catalog entry ({ models: [...] }), not the model list
-        // itself. Returning it directly makes pi reject the refresh result.
-        const cachedModels = Array.isArray(stored?.models) ? stored.models : undefined;
-
-        // Pi runs a cache-only refresh during startup and passes the resolved
-        // credential (from env or /login) to the network refresh. Do not fetch
-        // from process.env here: that would ignore keys entered via /login.
-        if (!allowNetwork || signal.aborted) return cachedModels;
-
-        const apiKey = credential?.type === "api_key"
-          ? credential.key
-          : process.env[apiKeyEnv];
-
-        let models;
-        try {
-          models = await fetchModels(baseUrl, apiKey, signal);
-        } catch (error) {
-          // Keep the last valid catalog on transient network/auth failures.
-          // Re-throw only when there is no cache, so pi can report the error
-          // without replacing the seed models with an invalid value.
-          if (cachedModels) return cachedModels;
-          throw error;
-        }
-
-        if (models.length > 0) {
-          // Persist the catalog so it survives restarts & offline starts.
-          await publish({ persist: { provider: p.id, models } });
-          return models;
-        }
-
-        // No models returned — keep whatever we have.
-        return cachedModels;
+      auth: {
+        apiKey: {
+          name: `${p.name} API Key`,
+          async login(interaction) {
+            const key = await interaction.prompt({ type: "secret", message: `${p.name} API Key` });
+            if (!key.trim()) throw new Error(`${p.name} API Key cannot be empty`);
+            return { type: "api_key", key: key.trim() };
+          },
+          async resolve({ credential, ctx }) {
+            const key = credential?.key ?? await ctx.env(apiKeyEnv);
+            return key ? { auth: { apiKey: key }, source: credential?.key ? "stored API key" : apiKeyEnv } : undefined;
+          },
+        },
       },
+      getModels: () => currentModels,
+      get models() { return currentModels; },
+      streamSimple: streamAgnes,
+      async refreshModels({ signal, stored, publish, allowNetwork, credential }) {
+        const cachedModels = Array.isArray(stored?.models) ? stored.models : undefined;
+        if (cachedModels?.length) currentModels = cachedModels;
+        if (!allowNetwork || signal.aborted) return currentModels;
+        const apiKey = credential?.key ?? process.env[apiKeyEnv];
+        try {
+          const models = await fetchModels(baseUrl, apiKey, signal);
+          if (models.length > 0) {
+            currentModels = models;
+            await publish({ persist: { provider: p.id, models } });
+          }
+        } catch (error) {
+          if (!currentModels.length) throw error;
+        }
+        return currentModels;
+      },
+    };
+    pi.registerProvider(provider.id, {
+      name: provider.name,
+      baseUrl: provider.baseUrl,
+      api: "openai-completions",
+      apiKey: `$${p.apiKeyEnv}`,
+      streamSimple: provider.streamSimple,
+      models: provider.getModels(),
+      refreshModels: provider.refreshModels,
     });
   }
 }
